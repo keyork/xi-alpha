@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "xi-alpha"
@@ -13,6 +13,7 @@ dependencies = [
     "akshare>=1.12",
     "scipy>=1.10",
     "matplotlib>=3.7",
+    "rich>=13.0",
 ]
 
 [project.optional-dependencies]
@@ -24,8 +25,8 @@ dev = [
 [project.scripts]
 xi-alpha = "xialpha.main:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/xialpha"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
