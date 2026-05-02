@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
 
@@ -38,6 +38,7 @@ def batch_evaluate(
     dates: np.ndarray,
     n_groups: int = config.N_GROUPS,
     n_jobs: int = config.N_JOBS,
+    progress_callback: Optional[Callable[[], None]] = None,
 ) -> tuple[list[tuple[str, BacktestResult, dict]], np.ndarray]:
     """批量评估多个因子。
 
@@ -49,6 +50,7 @@ def batch_evaluate(
         dates: 日期序列。
         n_groups: 分组数，默认 5。
         n_jobs: 并行进程数，默认 4。
+        progress_callback: 每完成一个因子后调用的回调函数。
 
     Returns:
         (排序后的因子结果列表, 因子间相关系数矩阵)。
@@ -58,6 +60,8 @@ def batch_evaluate(
         fn = compile_factor(expr)
         factor_values = fn(stock_data, backend)
         compiled.append((name, fn, factor_values))
+        if progress_callback:
+            progress_callback()
 
     worker_args = [
         (fv, forward_returns, dates, n_groups)
@@ -65,13 +69,21 @@ def batch_evaluate(
     ]
 
     if n_jobs <= 1 or len(worker_args) <= 1:
-        results = [_worker_backtest(*args) for args in worker_args]
+        results = []
+        for args in worker_args:
+            results.append(_worker_backtest(*args))
+            if progress_callback:
+                progress_callback()
     else:
         with ProcessPoolExecutor(max_workers=n_jobs) as pool:
             futures = [
                 pool.submit(_worker_backtest, *args) for args in worker_args
             ]
-            results = [f.result() for f in futures]
+            results = []
+            for f in futures:
+                results.append(f.result())
+                if progress_callback:
+                    progress_callback()
 
     factor_values_list = [fv for _, _, fv in compiled]
     names = [name for name, _, _ in compiled]

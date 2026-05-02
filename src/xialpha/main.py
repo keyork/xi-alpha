@@ -5,11 +5,9 @@ import logging
 import sys
 
 from . import config
+from .display import Timer, setup_logging, print_header, print_step, print_done
 
-logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
-    format=config.LOG_FORMAT,
-)
+setup_logging(config.LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 
@@ -74,9 +72,9 @@ def _load_data(args: argparse.Namespace):
     from .data.cache import get_cached_or_load
 
     if args.no_cache:
-        logger.info("Fetching data (cache disabled) ...")
+        print_step("data", "正在获取数据（缓存已禁用）...")
         return load_stock_data(args.start, args.end)
-    logger.info("Loading data (with cache) ...")
+    print_step("data", "正在加载数据（使用缓存）...")
     return get_cached_or_load(args.start, args.end)
 
 
@@ -95,52 +93,28 @@ def _parse_factors_file(path: str) -> list[tuple[str, str]]:
     return factors
 
 
-def _print_single_summary(factor_expr: str, metrics: dict) -> None:
-    print("\n" + "=" * 60)
-    print(f"Factor: {factor_expr}")
-    print("-" * 60)
-    for key, value in metrics.items():
-        if isinstance(value, float):
-            print(f"  {key:>25s}: {value:.6f}")
-        else:
-            print(f"  {key:>25s}: {value}")
-    print("=" * 60 + "\n")
-
-
-def _print_batch_summary(results: list[tuple]) -> None:
-    header = f"{'Factor':<35s} {'IR':>8s} {'IC_mean':>8s} {'Sharpe':>8s} {'MaxDD':>8s} {'Turnover':>8s}"
-    print("\n" + "=" * len(header))
-    print("Batch Factor Evaluation Summary (sorted by IR)")
-    print("=" * len(header))
-    print(header)
-    print("-" * len(header))
-
-    for name, _result, m in results:
-        ir = m.get("ir", float("nan"))
-        ic_mean = m.get("ic_mean", float("nan"))
-        sharpe = m.get("sharpe", float("nan"))
-        max_dd = m.get("max_drawdown", float("nan"))
-        turnover = m.get("daily_turnover", float("nan"))
-        print(f"{name:<35s} {ir:>8.4f} {ic_mean:>8.4f} {sharpe:>8.4f} {max_dd:>8.4f} {turnover:>8.4f}")
-    print("=" * len(header) + "\n")
-
-
 def run_pipeline(args: argparse.Namespace) -> None:
     if not any([args.factor, args.factors_file, args.classic]):
-        print("Error: must provide at least one of --factor, --factors-file, --classic")
-        print("Run with --help for usage information.")
+        from .display import _console
+        _console.print("[bold red]错误: 请提供 --factor, --factors-file 或 --classic 之一[/]")
+        _console.print("[dim]运行 --help 查看用法[/]")
         sys.exit(1)
 
     from .backend.auto import get_backend
+    from .display import create_progress
 
-    backend = get_backend()
+    timer = Timer()
+
     stock_data = _load_data(args)
+    backend = get_backend()
     forward_returns = backend.shift(stock_data.returns, -1)
 
     if args.factor:
         _run_single(args, stock_data, backend, forward_returns)
     else:
         _run_batch(args, stock_data, backend, forward_returns)
+
+    print_done(timer.elapsed)
 
 
 def _run_single(
@@ -153,24 +127,26 @@ def _run_single(
     from .backtest.engine import run_backtest
     from .backtest.metrics import calc_metrics
     from .report.summary import plot_single_factor
+    from .display import print_single_summary, create_progress
 
-    logger.info("Compiling factor: %s", args.factor)
+    print_header(stock_data, 1, "单因子")
+
+    print_step("factor", f"编译因子表达式: [dim]{args.factor}[/]")
     compiled_fn = compile_factor(args.factor)
 
-    logger.info("Computing factor values ...")
+    print_step("factor", "计算因子值...")
     factor_values = compiled_fn(stock_data, backend)
 
-    logger.info("Running backtest (%d groups) ...", args.groups)
+    print_step("backtest", f"运行回测 ({args.groups} 分组)...")
     result = run_backtest(factor_values, forward_returns, stock_data.dates, args.groups)
 
-    logger.info("Calculating metrics ...")
+    print_step("backtest", "计算指标...")
     metrics = calc_metrics(result)
 
-    logger.info("Generating report ...")
+    print_step("report", "生成报告...")
     plot_single_factor(result, metrics, title=args.factor, output_dir=args.output)
 
-    _print_single_summary(args.factor, metrics)
-    logger.info("Done.")
+    print_single_summary(args.factor, metrics)
 
 
 def _run_batch(
@@ -182,26 +158,32 @@ def _run_batch(
     from .factor.library import get_all_factors
     from .backtest.batch import batch_evaluate
     from .report.summary import plot_batch_summary
+    from .display import print_batch_summary, create_progress
 
     if args.classic:
         factor_list = get_all_factors()
-        logger.info("Using %d classic factors", len(factor_list))
+        mode = "经典因子"
     else:
         factor_list = _parse_factors_file(args.factors_file)
-        logger.info("Loaded %d factors from %s", len(factor_list), args.factors_file)
+        mode = f"文件 ({args.factors_file})"
 
-    logger.info("Running batch evaluation ...")
-    results, corr_matrix = batch_evaluate(
-        factor_list, stock_data, backend, forward_returns,
-        stock_data.dates, args.groups,
-    )
+    print_header(stock_data, len(factor_list), mode)
 
+    print_step("backtest", f"批量评估 {len(factor_list)} 个因子...")
+
+    with create_progress("回测进度", len(factor_list)) as progress:
+        task_id = progress.add_task("评估中", total=len(factor_list))
+        results, corr_matrix = batch_evaluate(
+            factor_list, stock_data, backend, forward_returns,
+            stock_data.dates, args.groups,
+            progress_callback=lambda: progress.advance(task_id),
+        )
+
+    print_batch_summary(results)
+
+    print_step("report", "生成批量报告...")
     factor_names = [name for name, _ in factor_list]
-    _print_batch_summary(results)
-
-    logger.info("Generating batch report ...")
     plot_batch_summary(results, corr_matrix, factor_names, output_dir=args.output)
-    logger.info("Done.")
 
 
 def main() -> None:
