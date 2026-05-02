@@ -66,20 +66,9 @@ def plot_single_factor(result, metrics, title="", output_dir=None):
     _setup_style()
 
     ic_mean = metrics.get("ic_mean", 0.0)
-    ir = metrics.get("ir", 0.0)
     sharpe = metrics.get("sharpe", 0.0)
-    max_dd = metrics.get("max_drawdown", 0.0)
-    turnover = metrics.get("daily_turnover", 0.0)
-    t_stat = metrics.get("t_stat", 0.0)
-    t_pvalue = metrics.get("t_pvalue", 1.0)
 
-    print(
-        f"IC={ic_mean:.4f} IR={ir:.4f} Sharpe={sharpe:.4f} "
-        f"MaxDD={max_dd:.4f} Turnover={turnover:.4f} "
-        f"t-stat={t_stat:.4f} p={t_pvalue:.4f}"
-    )
-
-    fig, axes = plt.subplots(2, 2, figsize=config.FIGSIZE_SINGLE)
+    fig, axes = plt.subplots(2, 2, figsize=config.FIGSIZE_SINGLE, constrained_layout=True)
     fig.suptitle(title or "因子报告", fontsize=14, fontweight="bold")
 
     ax0 = axes[0, 0]
@@ -126,7 +115,6 @@ def plot_single_factor(result, metrics, title="", output_dir=None):
     ax3.set_xlabel("持有天数")
     ax3.set_ylabel("IC")
 
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
     fig.savefig(out / config.FILENAME_SINGLE, dpi=config.DPI)
     plt.show()
     plt.close(fig)
@@ -157,8 +145,8 @@ def plot_batch_summary(results_list, corr_matrix, factor_names, output_dir=None)
     _setup_style()
 
     n_factors = len(factor_names)
-    fig = plt.figure(figsize=config.FIGSIZE_BATCH)
-    gs = fig.add_gridspec(2, 2, height_ratios=[1, 1.2], hspace=0.35, wspace=0.3)
+    fig = plt.figure(figsize=config.FIGSIZE_BATCH, constrained_layout=True)
+    gs = fig.add_gridspec(2, 2, height_ratios=[1, 1.2])
 
     ax_table = fig.add_subplot(gs[0, :])
     ax_table.axis("off")
@@ -235,7 +223,6 @@ def plot_batch_summary(results_list, corr_matrix, factor_names, output_dir=None)
     ax_nav.legend(fontsize=7, loc="best")
 
     fig.suptitle("批量因子报告", fontsize=14, fontweight="bold")
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(out / config.FILENAME_BATCH, dpi=config.DPI)
     plt.show()
     plt.close(fig)
