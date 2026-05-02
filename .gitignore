@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# xi-alpha runtime artifacts
+output/
+*.pkl
