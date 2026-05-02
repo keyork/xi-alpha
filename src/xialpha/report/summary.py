@@ -73,10 +73,14 @@ def plot_single_factor(result, metrics, title="", output_dir=None):
 
     ax0 = axes[0, 0]
     n_groups = result.n_groups
-    cmap = plt.get_cmap("RdYlGn", n_groups)
+    cmap = plt.get_cmap(config.COLORMAP_GROUPS, n_groups)
+    group_labels = [
+        f"G{g} (高)" if g == 0 else f"G{g} (低)" if g == n_groups - 1 else f"G{g}"
+        for g in range(n_groups)
+    ]
     for g in range(n_groups):
         nav = result.group_nav[g]
-        ax0.plot(nav, color=cmap(g), label=f"G{g}")
+        ax0.plot(nav, color=cmap(g), label=group_labels[g])
     ax0.set_title("分组累积净值")
     ax0.set_xlabel("交易日")
     ax0.set_ylabel("净值")
@@ -84,7 +88,7 @@ def plot_single_factor(result, metrics, title="", output_dir=None):
 
     ax1 = axes[0, 1]
     ls_nav = np.asarray(result.long_short_nav)
-    ax1.plot(ls_nav, color="steelblue", linewidth=1.2)
+    ax1.plot(ls_nav, color=config.LINE_COLOR, linewidth=1.2)
     ax1.set_title(f"多空净值  (Sharpe={sharpe:.4f})")
     ax1.set_xlabel("交易日")
     ax1.set_ylabel("净值")
@@ -93,7 +97,7 @@ def plot_single_factor(result, metrics, title="", output_dir=None):
     ic_series = np.asarray(result.ic_series)
     n_days = len(ic_series)
     if n_days > 500:
-        ax2.plot(ic_series, color="steelblue", linewidth=0.6)
+        ax2.plot(ic_series, color=config.LINE_COLOR, linewidth=0.6)
     else:
         colors = ["green" if not np.isnan(v) and v >= 0 else "red" for v in ic_series]
         ax2.bar(np.arange(n_days), np.nan_to_num(ic_series, nan=0.0), color=colors, width=0.8)
@@ -195,7 +199,7 @@ def plot_batch_summary(results_list, corr_matrix, factor_names, output_dir=None)
 
     ax_corr = fig.add_subplot(gs[1, 0])
     corr = np.asarray(corr_matrix)
-    im = ax_corr.imshow(corr, cmap="coolwarm", vmin=-1, vmax=1, aspect="auto")
+    im = ax_corr.imshow(corr, cmap=config.COLORMAP_CORR, vmin=-1, vmax=1, aspect="auto")
     fig.colorbar(im, ax=ax_corr, fraction=0.046, pad=0.04)
     for i in range(corr.shape[0]):
         for j in range(corr.shape[1]):
@@ -211,7 +215,7 @@ def plot_batch_summary(results_list, corr_matrix, factor_names, output_dir=None)
 
     ax_nav = fig.add_subplot(gs[1, 1])
     top_n = min(config.TOP_N_DISPLAY, len(results_list))
-    cmap_nav = plt.get_cmap("tab10", top_n)
+    cmap_nav = plt.get_cmap(config.COLORMAP_NAV, top_n)
     for idx in range(top_n):
         name, result, m = results_list[idx]
         ls_nav = np.asarray(result.long_short_nav)
