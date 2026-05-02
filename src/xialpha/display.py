@@ -35,6 +35,17 @@ _STYLES = {
     "done": "bold bright_green",
 }
 
+_METRIC_LABELS = {
+    "ic_mean": "IC 均值",
+    "ir": "IR (信息比率)",
+    "sharpe": "Sharpe",
+    "max_drawdown": "最大回撤",
+    "daily_turnover": "日换手率",
+    "t_stat": "t-statistic",
+    "t_pvalue": "p-value",
+    "n_periods": "有效期数",
+}
+
 
 def setup_logging(level: str = "INFO") -> None:
     handler = RichHandler(
@@ -106,17 +117,6 @@ def print_single_summary(factor_expr: str, metrics: dict) -> None:
     table = Table(show_header=True, header_style="bold cyan", border_style="bright_blue")
     table.add_column("指标", style="white", min_width=20)
     table.add_column("值", justify="right", style="bold")
-
-    _METRIC_LABELS = {
-        "ic_mean": "IC 均值",
-        "ir": "IR (信息比率)",
-        "sharpe": "Sharpe",
-        "max_drawdown": "最大回撤",
-        "daily_turnover": "日换手率",
-        "t_stat": "t-statistic",
-        "t_pvalue": "p-value",
-        "n_periods": "有效期数",
-    }
 
     for key, label in _METRIC_LABELS.items():
         val = metrics.get(key)

@@ -14,12 +14,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-ROOT_DIR = Path(__file__).resolve().parent
-
-_CONFIG_SEARCH_PATHS = [
-    Path.cwd() / "xi-alpha.toml",
-    ROOT_DIR.parent.parent / "xi-alpha.toml",
-]
+_PACKAGE_DIR = Path(__file__).resolve().parent
 
 
 def _find_config_path() -> Path:
@@ -30,12 +25,17 @@ def _find_config_path() -> Path:
             return p
         raise FileNotFoundError(f"XIALPHA_CONFIG 指定的配置文件不存在: {p}")
 
-    for p in _CONFIG_SEARCH_PATHS:
+    search_paths = [
+        Path.cwd() / "xi-alpha.toml",
+        _PACKAGE_DIR.parent.parent / "xi-alpha.toml",
+    ]
+
+    for p in search_paths:
         if p.is_file():
             return p
 
     raise FileNotFoundError(
-        f"未找到 xi-alpha.toml，已搜索: {[str(p) for p in _CONFIG_SEARCH_PATHS]}"
+        f"未找到 xi-alpha.toml，已搜索: {[str(p) for p in search_paths]}"
     )
 
 
@@ -69,6 +69,9 @@ def _defaults() -> dict[str, Any]:
             "n_groups": 5,
             "trading_days_per_year": 252,
             "n_jobs": 4,
+            "min_stocks_for_group": 2,
+            "min_stocks_for_ic": 3,
+            "ic_decay_days": 10,
         },
         "report": {
             "output_dir": "output",
@@ -76,6 +79,12 @@ def _defaults() -> dict[str, Any]:
             "top_n_display": 5,
             "figure": {"single": [16, 10], "batch": [18, 14]},
             "filename": {"single": "factor_report.png", "batch": "batch_report.png"},
+            "style": {
+                "colormap_groups": "RdYlGn",
+                "colormap_corr": "coolwarm",
+                "colormap_nav": "tab10",
+                "line_color": "steelblue",
+            },
         },
         "backend": {"type": "numpy"},
         "logging": {
@@ -94,6 +103,7 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
 
 
 _CFG = load_config()
+PROJECT_ROOT: Path = _find_config_path().parent
 
 
 def _get(*keys: str) -> Any:
@@ -115,7 +125,7 @@ REQUEST_INTERVAL: float = _get("data", "request_interval")
 MAX_RETRIES: int = _get("data", "max_retries")
 BASE_DELAY: float = _get("data", "base_delay")
 ADJUST: str = _get("data", "adjust")
-CACHE_DIR: Path = ROOT_DIR / _get("data", "cache", "dir")
+CACHE_DIR: Path = PROJECT_ROOT / _get("data", "cache", "dir")
 STOCK_POOL: list[str] = _get("data", "stock_pool", "symbols")
 
 # ── factors ────────────────────────────────────────────────────────────
@@ -126,15 +136,22 @@ CLASSIC_FACTORS: dict[str, str] = _get("factors", "classic")
 N_GROUPS: int = _get("backtest", "n_groups")
 TRADING_DAYS_PER_YEAR: int = _get("backtest", "trading_days_per_year")
 N_JOBS: int = _get("backtest", "n_jobs")
+MIN_STOCKS_FOR_GROUP: int = _get("backtest", "min_stocks_for_group")
+MIN_STOCKS_FOR_IC: int = _get("backtest", "min_stocks_for_ic")
+IC_DECAY_DAYS: int = _get("backtest", "ic_decay_days")
 
 # ── report ─────────────────────────────────────────────────────────────
-OUTPUT_DIR: Path = ROOT_DIR / _get("report", "output_dir")
+OUTPUT_DIR: Path = PROJECT_ROOT / _get("report", "output_dir")
 DPI: int = _get("report", "dpi")
 TOP_N_DISPLAY: int = _get("report", "top_n_display")
 FIGSIZE_SINGLE: tuple[int, int] = tuple(_get("report", "figure", "single"))
 FIGSIZE_BATCH: tuple[int, int] = tuple(_get("report", "figure", "batch"))
 FILENAME_SINGLE: str = _get("report", "filename", "single")
 FILENAME_BATCH: str = _get("report", "filename", "batch")
+COLORMAP_GROUPS: str = _get("report", "style", "colormap_groups")
+COLORMAP_CORR: str = _get("report", "style", "colormap_corr")
+COLORMAP_NAV: str = _get("report", "style", "colormap_nav")
+LINE_COLOR: str = _get("report", "style", "line_color")
 
 # ── backend ────────────────────────────────────────────────────────────
 BACKEND_TYPE: str = _get("backend", "type")

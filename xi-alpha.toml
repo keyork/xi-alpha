@@ -10,11 +10,15 @@ max_retries = 3           # 单只股票最大重试次数
 base_delay = 2.0          # 首次退避等待（秒），后续指数翻倍
 adjust = "qfq"            # 复权方式: qfq(前复权) / hfq(后复权) / ""(不复权)
 
+# ⚠️  幸存者偏差警告 / Survivorship Bias Warning
+# 默认股票池由人工挑选的约 50 只大盘蓝筹组成，这些股票已经过市场长期验证，
+# 不包含已退市、ST、或长期表现不佳的标的。在此池子上得到的因子 IC / IR
+# 可能显著高于全市场水平。生产环境应替换为指数成分股（如中证 500/1000）。
+
 [data.cache]
-dir = ".cache"            # 缓存目录（相对于 src/xialpha/）
+dir = ".cache"
 
 [data.stock_pool]
-# 约 50 只代表性 A 股，覆盖主要行业和市值区间
 symbols = [
     # 白酒 / 消费
     "600519",  # 贵州茅台
@@ -101,10 +105,13 @@ price_volume_divergence = "-1 * rolling_corr(close, volume, 10)"
 n_groups = 5              # 分组数
 trading_days_per_year = 252
 n_jobs = 4                # 并行进程数
+min_stocks_for_group = 2  # 分组所需的最小截面股票数，低于此值跳过该期
+min_stocks_for_ic = 3     # IC 计算所需的最小截面股票数
+ic_decay_days = 10        # IC 衰减计算的最大持有天数
 
 # ── 报告 ────────────────────────────────────────────────────────────────
 [report]
-output_dir = "output"     # 输出目录（相对于 src/xialpha/）
+output_dir = "output"
 dpi = 150
 top_n_display = 5         # 批量报告中展示前 N 个因子
 
@@ -115,6 +122,12 @@ batch = [18, 14]          # 批量报告图尺寸
 [report.filename]
 single = "factor_report.png"
 batch = "batch_report.png"
+
+[report.style]
+colormap_groups = "RdYlGn"    # 分组净值色谱
+colormap_corr = "coolwarm"    # 相关性矩阵色谱
+colormap_nav = "tab10"        # 多空净值色谱
+line_color = "steelblue"      # 单线图默认颜色
 
 # ── 后端 ────────────────────────────────────────────────────────────────
 [backend]
