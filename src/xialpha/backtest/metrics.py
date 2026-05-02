@@ -132,3 +132,41 @@ def calc_metrics(result: BacktestResult) -> dict:
         "t_pvalue": t_pvalue,
         "group_monotonicity": mono,
     }
+
+
+def calc_ic_decay(
+    factor_values: np.ndarray,
+    forward_returns: np.ndarray,
+    max_days: int | None = None,
+) -> list[tuple[int, float]]:
+    """计算不同持有天数的 IC 衰减。
+
+    Args:
+        factor_values: 因子值矩阵 (T, N)
+        forward_returns: 前向收益率矩阵 (T, N)
+        max_days: 最大持有天数
+
+    Returns:
+        [(day_k, ic_k), ...] 列表。
+    """
+    from scipy.stats import spearmanr
+
+    if max_days is None:
+        max_days = config.IC_DECAY_DAYS
+
+    T = factor_values.shape[0]
+    decay: list[tuple[int, float]] = []
+    for k in range(1, max_days + 1):
+        if k >= T:
+            break
+        shifted = np.full_like(forward_returns, np.nan)
+        shifted[: T - k] = forward_returns[k:]
+        ics = []
+        for t in range(T):
+            valid = ~np.isnan(factor_values[t]) & ~np.isnan(shifted[t])
+            if valid.sum() >= config.MIN_STOCKS_FOR_IC:
+                c, _ = spearmanr(factor_values[t, valid], shifted[t, valid])
+                if not np.isnan(c):
+                    ics.append(c)
+        decay.append((k, float(np.mean(ics)) if ics else 0.0))
+    return decay

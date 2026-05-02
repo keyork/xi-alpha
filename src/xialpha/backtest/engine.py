@@ -12,18 +12,7 @@ from .. import config
 
 @dataclass
 class BacktestResult:
-    """回测结果数据类。
-
-    Attributes:
-        group_returns: 各分组收益率序列
-        group_nav: 各分组累积净值
-        long_short: 多空收益率
-        long_short_nav: 多空累积净值
-        ic_series: IC 序列
-        dates: 日期序列
-        n_groups: 分组数
-        group_labels: 分组标签矩阵 (T, N), -1 表示无效
-    """
+    """回测结果数据类。"""
 
     group_returns: dict[int, np.ndarray]
     group_nav: dict[int, np.ndarray]
@@ -32,7 +21,7 @@ class BacktestResult:
     ic_series: np.ndarray
     dates: np.ndarray
     n_groups: int
-    group_labels: np.ndarray  # (T, N) int, -1 for invalid
+    group_labels: np.ndarray
 
 
 def run_backtest(
@@ -62,7 +51,7 @@ def run_backtest(
     for t in range(T):
         row_valid = valid[t]
         n_valid = row_valid.sum()
-        if n_valid < 2:
+        if n_valid < config.MIN_STOCKS_FOR_GROUP:
             continue
         ranked = rankdata(factor_values[t, row_valid], method="average")
         pct = (ranked - 1.0) / (n_valid - 1.0)
@@ -91,14 +80,13 @@ def run_backtest(
         np.nan,
         group_returns[0] - group_returns[n_groups - 1],
     )
-    ls_for_nav = np.where(np.isnan(long_short), 0.0, long_short)
-    long_short_nav = np.cumprod(1.0 + ls_for_nav)
+    long_short_nav = group_nav[0] / group_nav[n_groups - 1]
 
     ic_series = np.full(T, np.nan)
     for t in range(T):
         row_valid = valid[t]
         n_valid = row_valid.sum()
-        if n_valid < 3:
+        if n_valid < config.MIN_STOCKS_FOR_IC:
             continue
         corr, _ = spearmanr(
             factor_values[t, row_valid], forward_returns[t, row_valid]

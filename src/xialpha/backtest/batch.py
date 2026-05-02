@@ -12,7 +12,7 @@ from ..backend.base import BackendBase
 from ..factor.compiler import compile_factor
 
 from .engine import BacktestResult, run_backtest
-from .metrics import calc_metrics
+from .metrics import calc_metrics, calc_ic_decay
 
 if TYPE_CHECKING:
     from ..data.loader import StockData
@@ -24,9 +24,9 @@ def _worker_backtest(
     dates: np.ndarray,
     n_groups: int,
 ) -> tuple[BacktestResult, dict]:
-    """工作函数，在子进程中执行单因子的回测和指标计算。"""
     result = run_backtest(factor_values, forward_returns, dates, n_groups)
     metrics = calc_metrics(result)
+    metrics["ic_decay"] = calc_ic_decay(factor_values, forward_returns)
     return result, metrics
 
 

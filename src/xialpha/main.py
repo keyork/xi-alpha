@@ -125,7 +125,7 @@ def _run_single(
 ) -> None:
     from .factor.compiler import compile_factor
     from .backtest.engine import run_backtest
-    from .backtest.metrics import calc_metrics
+    from .backtest.metrics import calc_metrics, calc_ic_decay
     from .report.summary import plot_single_factor
     from .display import print_single_summary, create_progress
 
@@ -142,6 +142,7 @@ def _run_single(
 
     print_step("backtest", "计算指标...")
     metrics = calc_metrics(result)
+    metrics["ic_decay"] = calc_ic_decay(factor_values, forward_returns)
 
     print_step("report", "生成报告...")
     plot_single_factor(result, metrics, title=args.factor, output_dir=args.output)
