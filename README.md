@@ -16,7 +16,7 @@
 
 ```bash
 # 克隆并安装
-git clone https://github.com/your-org/xi-alpha.git
+git clone https://github.com/keyork/xi-alpha.git
 cd xi-alpha
 pip install -e .
 ```
