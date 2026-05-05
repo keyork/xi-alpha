@@ -133,6 +133,28 @@ line_color = "steelblue"      # 单线图默认颜色
 [backend]
 type = "numpy"            # numpy / jax / torch（预留）
 
+# ── 因子挖掘 ────────────────────────────────────────────────────────────
+
+[mining.gp]
+population_size = 100     # GP 种群大小
+n_generations = 50        # 进化代数
+crossover_prob = 0.8      # 交叉概率
+mutation_prob = 0.15      # 变异概率
+max_depth = 4             # 表达式树最大深度
+tournament_size = 3       # 锦标赛选择大小
+elites = 5                # 精英保留数量
+objectives = ["ir", "sharpe"]  # NSGA-II 优化目标（可选: ir, sharpe, -max_drawdown, -daily_turnover）
+seed = 42                 # 随机种子
+
+[mining.llm]
+api_url = "http://localhost:39001/v1/chat/completions"  # OpenAI 兼容 API 地址
+model_name = "glm-5.1"    # 模型名称
+api_key = ""              # API Key（可为空）
+max_iterations = 10       # 最大迭代轮数
+factors_per_iteration = 5 # 每轮生成因子数
+temperature = 0.7         # 采样温度
+max_tokens = 2048         # 单次回复最大 token 数
+
 # ── 日志 ────────────────────────────────────────────────────────────────
 [logging]
 level = "INFO"

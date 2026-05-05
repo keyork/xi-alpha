@@ -87,6 +87,28 @@ def _defaults() -> dict[str, Any]:
             },
         },
         "backend": {"type": "numpy"},
+        "mining": {
+            "gp": {
+                "population_size": 100,
+                "n_generations": 50,
+                "crossover_prob": 0.8,
+                "mutation_prob": 0.15,
+                "max_depth": 4,
+                "tournament_size": 3,
+                "elites": 5,
+                "objectives": ["ir", "sharpe"],
+                "seed": 42,
+            },
+            "llm": {
+                "api_url": "http://localhost:39001/v1/chat/completions",
+                "model_name": "glm-5.1",
+                "api_key": "",
+                "max_iterations": 10,
+                "factors_per_iteration": 5,
+                "temperature": 0.7,
+                "max_tokens": 2048,
+            },
+        },
         "logging": {
             "level": "INFO",
             "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -155,6 +177,26 @@ LINE_COLOR: str = _get("report", "style", "line_color")
 
 # ── backend ────────────────────────────────────────────────────────────
 BACKEND_TYPE: str = _get("backend", "type")
+
+# ── mining.gp ─────────────────────────────────────────────────────────
+GP_POPULATION_SIZE: int = _get("mining", "gp", "population_size")
+GP_N_GENERATIONS: int = _get("mining", "gp", "n_generations")
+GP_CROSSOVER_PROB: float = _get("mining", "gp", "crossover_prob")
+GP_MUTATION_PROB: float = _get("mining", "gp", "mutation_prob")
+GP_MAX_DEPTH: int = _get("mining", "gp", "max_depth")
+GP_TOURNAMENT_SIZE: int = _get("mining", "gp", "tournament_size")
+GP_ELITES: int = _get("mining", "gp", "elites")
+GP_OBJECTIVES: list[str] = _get("mining", "gp", "objectives")
+GP_SEED: int = _get("mining", "gp", "seed")
+
+# ── mining.llm ────────────────────────────────────────────────────────
+LLM_API_URL: str = _get("mining", "llm", "api_url")
+LLM_MODEL_NAME: str = _get("mining", "llm", "model_name")
+LLM_API_KEY: str = _get("mining", "llm", "api_key")
+LLM_MAX_ITERATIONS: int = _get("mining", "llm", "max_iterations")
+LLM_FACTORS_PER_ITER: int = _get("mining", "llm", "factors_per_iteration")
+LLM_TEMPERATURE: float = _get("mining", "llm", "temperature")
+LLM_MAX_TOKENS: int = _get("mining", "llm", "max_tokens")
 
 # ── logging ────────────────────────────────────────────────────────────
 LOG_LEVEL: str = _get("logging", "level")
