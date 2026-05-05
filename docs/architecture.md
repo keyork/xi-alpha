@@ -55,16 +55,46 @@ if __name__ == "__main__":
 ```
 CLI / main.py (根目录入口)
     │
-    ▼
-┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
-│   Data   │ →  │ Backend  │ →  │  Factor  │ →  │ Backtest │ →  │  Report  │ →  │ Display  │
-│  Layer   │    │  Layer   │    │  Layer   │    │  Layer   │    │  Layer   │    │  Layer   |
-└──────────┘    └──────────┘    └──────────┘    └──────────┘    └──────────┘    └──────────┘
-  loader.py       BackendBase      compiler         engine          summary          display.py
-  cache.py        numpy_backend    operators.py     metrics.py      matplotlib
-                  auto.py          library.py       batch.py        中文字体自适应
+    ├── 回测模式 ──────────────────────────────────────────────────────────────────────────────────┐
+    │                                                                                             │
+    ▼                                                                                             │
+┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐      │
+│   Data   │ →  │ Backend  │ →  │  Factor  │ →  │ Backtest │ →  │  Report  │ →  │ Display  │      │
+│  Layer   │    │  Layer   │    │  Layer   │    │  Layer   │    │  Layer   │    │  Layer   |      │
+└──────────┘    └──────────┘    └──────────┘    └──────────┘    └──────────┘    └──────────┘      │
+  loader.py       BackendBase      compiler         engine          summary          display.py    │
+  cache.py        numpy_backend    operators.py     metrics.py      matplotlib                     │
+                   auto.py          library.py       batch.py        中文字体自适应                 │
+                                                                                                   │
+    └── 挖掘模式 ─────────────────────────────────────────────────────────────────────────────────┘
+            │
+            ▼
+    ┌───────────────────────────────────────────────────────────────────┐
+    │                      Mining Layer (挖掘层)                        │
+    │                                                                   │
+    │  ┌──────────────────────────┐  ┌──────────────────────────────┐  │
+    │  │ GP+NSGA-II 挖掘器         │  │ LLM Agent 挖掘器              │  │
+    │  │                          │  │                              │  │
+    │  │ tree.py                  │  │ prompts.py                   │  │
+    │  │   generate_tree()        │  │   SYSTEM_PROMPT              │  │
+    │  │   crossover()            │  │   build_initial_prompt()     │  │
+    │  │   mutate()               │  │   build_iteration_prompt()   │  │
+    │  │                          │  │   parse_llm_response()       │  │
+    │  │ nsga.py                  │  │                              │  │
+    │  │   fast_non_dominated_    │  │ llm_miner.py                 │  │
+    │  │     sort()               │  │   LLMMiner.mine()            │  │
+    │  │   nsga2_select()         │  │                              │  │
+    │  │                          │  │                              │  │
+    │  │ gp_miner.py              │  │                              │  │
+    │  │   GPMiner.mine()         │  │                              │  │
+    │  └──────────────────────────┘  └──────────────────────────────┘  │
+    │                                                                   │
+    │  共享基类: base.py → BaseMiner._evaluate_factor()                  │
+    │  内部调用: Factor Layer (compile) + Backtest Layer (run_backtest)  │
+    └───────────────────────────────────────────────────────────────────┘
 
-数据流向: 原始行情 → 标准化 ndarray → 因子值序列 → 分组回测结果 → 图表/表格 → Rich 终端美化输出
+回测模式数据流向: 原始行情 → 标准化 ndarray → 因子值序列 → 分组回测结果 → 图表/表格 → Rich 终端美化输出
+挖掘模式数据流向: 原始行情 → 标准化 ndarray → [GP 进化 / LLM 迭代] → 因子表达式 → 编译 → 回测 → 筛选 → 按 IR 降序输出
 ```
 
 ### 各层职责
@@ -77,6 +107,7 @@ CLI / main.py (根目录入口)
 | Backtest Layer | 因子值矩阵 + 收益率矩阵 | `BacktestResult` (13 项指标 + IC Decay) | 分组回测、多空比值法 NAV、统计检验 |
 | Report Layer | `BacktestResult` + 指标字典 | PNG 图片 | matplotlib 可视化报告生成 |
 | Display Layer | `BacktestResult` + 指标字典 | 终端美化输出 | Rich 面板头部、指标表格、进度条、计时器 |
+| Mining Layer | `StockData` + `BackendBase` 实例 | `list[(expression, metrics)]` 按 IR 降序 | GP+NSGA-II 自动进化因子表达式，或 LLM Agent 迭代式因子发现 |
 
 ### 层间数据流
 
@@ -496,6 +527,288 @@ _STYLES = {
 
 ---
 
+### 3.7 挖掘层 (`mining/`)
+
+挖掘层提供两种自动因子发现策略——基于遗传编程的 GP+NSGA-II 挖掘器，以及基于大语言模型的 LLM Agent 挖掘器。两者共享 `BaseMiner` 基类提供的评估管线，内部调用 Factor Layer（编译）和 Backtest Layer（回测 + 指标计算）。
+
+#### 3.7.1 `base.py` — BaseMiner ABC
+
+所有挖掘器的抽象基类，封装了「编译表达式 → 执行 → 回测 → 指标」的完整评估管线。
+
+**BaseMiner.\_\_init\_\_(stock_data, backend)**
+
+- `stock_data`：`StockData` 实例，包含行情数据
+- `backend`：`BackendBase` 实例，用于数值计算
+- 预计算前向收益率：`self._forward_returns = backend.shift(stock_data.returns, -1)`，用于回测
+- 初始化去重集合：`self._seen_expressions: set[str] = set()`
+
+**\_evaluate\_factor(expression)** — 单因子评估
+
+核心评估方法，执行以下流程：
+
+1. **去重检查**：表达式已在 `_seen_expressions` 中则直接返回 `None`
+2. **编译**：调用 `compile_factor(expression)` 将表达式编译为可执行函数
+3. **执行**：调用编译后的函数获取因子值 ndarray
+4. **全 NaN 检查**：`np.all(np.isnan(factor_values))` 为 True 则返回 `None`
+5. **回测**：调用 `run_backtest(factor_values, self._forward_returns, stock_data.dates)`
+6. **指标计算**：调用 `calc_metrics(result)` 计算指标
+7. 返回指标字典；任何步骤失败均返回 `None`
+
+```python
+def _evaluate_factor(self, expression: str) -> dict | None:
+    if expression in self._seen_expressions:
+        return None
+    self._seen_expressions.add(expression)
+    try:
+        compiled = compile_factor(expression)
+        factor_values = compiled(self.stock_data, self.backend)
+        if np.all(np.isnan(factor_values)):
+            return None
+        result = run_backtest(factor_values, self._forward_returns, self.stock_data.dates)
+        return calc_metrics(result)
+    except Exception:
+        return None
+```
+
+**\_evaluate\_batch(expressions)** — 批量评估
+
+对表达式列表逐一调用 `_evaluate_factor()`，返回 `[(expression, metrics | None), ...]` 列表。
+
+**mine()** — 抽象方法
+
+子类必须实现的核心挖掘方法，返回 `list[tuple[str, dict]]`——所有成功评估的因子按 IR 降序排列。
+
+#### 3.7.2 `tree.py` — 表达式树操作
+
+为 GP 挖掘器提供表达式树的表示、随机生成、交叉、变异和序列化功能。
+
+**FactorNode dataclass**
+
+```python
+@dataclass
+class FactorNode:
+    node_type: str          # 'field', 'constant', 'unary', 'window', 'corr', 'arithmetic'
+    value: str              # 字段名 / 算子名 / 运算符 / 常量字符串
+    children: list[FactorNode]
+    window: int | None = None  # 仅 window 和 corr 类型使用
+```
+
+**算子分类表**
+
+| 类别 | 元素 | 子节点数 |
+|------|------|----------|
+| 终端-字段 | `open`, `high`, `low`, `close`, `volume`, `amount`, `returns` | 0 |
+| 终端-常量 | `-1`, `-0.5`, `0.5`, `1`, `2`, `3`, `5`, `10`, `20`, `60` | 0 |
+| 一元算子 | `rank`, `zscore`, `demean`, `log`, `abs`, `sign` | 1 |
+| 窗口算子 | `rolling_mean`, `rolling_std`, `rolling_sum`, `rolling_max`, `rolling_min`, `shift`, `pct_change`, `diff` | 1 + window |
+| 相关算子 | `rolling_corr` | 2 + window |
+| 算术运算 | `+`, `-`, `*`, `/` | 2 |
+
+窗口值候选：`[5, 10, 20, 60]`。
+
+**to\_expression(node)** — 序列化
+
+将表达式树序列化为与 AST 编译器兼容的字符串：
+
+```python
+# field → "close"
+# constant → "20"
+# unary → "rank(close)"
+# window → "rolling_mean(close, 20)"
+# corr → "rolling_corr(close, volume, 10)"
+# arithmetic → "(close) * (volume)"
+```
+
+**generate\_tree(max\_depth, rng, method)** — 随机生成
+
+- `method="grow"`：在非叶节点以约 40% 概率选择算子，60% 概率选择终端，生成形态多样的树
+- `method="full"`：深度未达上限前只选算子，保证树的结构完整
+- 终端生成概率分布：85% 数据字段、15% 常量
+- 算子类别选择权重：一元 × 3、窗口 × 3、算术 × 2、corr × 1
+
+**crossover(parent1, parent2, max\_depth, rng)** — 交叉
+
+随机选择两棵树的各一个子树进行交换，返回两个子代（深拷贝，不修改原始树）。**深度保护**：若任一子代深度超过 `max_depth`，则放弃交叉，返回原始树的拷贝。
+
+**mutate(tree, max\_depth, rng)** — 变异
+
+随机选择一个子树，替换为新随机生成的子树。可用深度为 `max(1, max_depth - len(path))`。**深度保护**：变异后深度超过 `max_depth` 则放弃变异，返回原始树的拷贝。
+
+#### 3.7.3 `nsga.py` — NSGA-II 多目标选择
+
+为 GP 挖掘器提供基于 Pareto 支配的多目标选择算法。
+
+**dominates(a, b)**
+
+判断个体 `a` 是否支配个体 `b`。采用最大化语义：`a` 支配 `b` 当且仅当所有目标上 `a >= b`，且至少一个目标上 `a > b`。
+
+**fast\_non\_dominated\_sort(fitnesses)**
+
+对种群进行非支配排序，返回 Pareto 前沿列表。每个前沿是一个索引列表，第一个前沿为 Pareto 最优前沿（不被任何其他个体支配）。
+
+算法流程：
+1. 计算每个个体的支配计数和被支配集合
+2. 支配计数为 0 的个体组成第一前沿
+3. 逐层剥离：对当前前沿中每个个体，将其被支配集合中的个体支配计数减 1，计数归零者进入下一前沿
+
+**crowding\_distance(front\_fitnesses)**
+
+计算单个前沿内个体的拥挤度距离。**边界个体**（每个目标上的最小值和最大值个体）距离设为 `inf`，确保边界个体始终被保留。内部个体的距离为各目标方向上相邻个体间距的归一化之和。
+
+**nsga2\_select(population, fitnesses, n\_select)**
+
+NSGA-II 选择主函数：
+
+1. 对种群执行非支配排序，得到前沿列表
+2. 按前沿顺序逐个填入选中集合
+3. 当最后一前沿无法全部放入时，按拥挤度距离降序截断
+
+**tournament\_select(population, fitnesses, tournament\_size, rng)**
+
+锦标赛选择：随机抽取 `tournament_size` 个候选个体，选择 Pareto 排名最低（最优）的个体。同排名时以拥挤度距离决胜（距离大者优先）。
+
+#### 3.7.4 `gp_miner.py` — GP+NSGA-II 挖掘器
+
+结合遗传编程和 NSGA-II 多目标选择的因子挖掘器。
+
+**进化主循环**
+
+```
+初始化种群 (grow 方法随机生成 population_size 棵树)
+    │
+    ▼
+评估初始种群 (编译 → 回测 → 指标)
+    │
+    ▼
+┌─── 进化循环 (n_generations 代) ──────────────────────────────────┐
+│                                                                   │
+│   1. 计算适应度: config.GP_OBJECTIVES → metrics 字典取值            │
+│   2. NSGA-II 选择: 从当前种群选出 (pop_size - elites) 个个体       │
+│   3. 精英保留: 按 IR 降序取前 elites 个有效个体                      │
+│   4. 交叉 + 变异: 对选中个体生成子代                                 │
+│      - crossover_prob: 交叉概率                                     │
+│      - mutation_prob: 变异概率                                      │
+│      - 其余: 直接复制                                               │
+│   5. 深度保护: 超过 max_depth 则重新生成                            │
+│   6. 评估新个体: 对新种群中未见过的表达式进行评估                     │
+│                                                                   │
+└───────────────────────────────────────────────────────────────────┘
+    │
+    ▼
+汇总: 所有历史成功因子按 IR 降序返回
+```
+
+**适应度映射**
+
+通过 `config.GP_OBJECTIVES` 配置列表将目标名称映射到 metrics 字典取值。以 `-` 前缀的目标名表示取反（用于需要最小化的指标，如最大回撤）。评估失败的个体适应度为全零元组，在 NSGA-II 排序中自然被淘汰。
+
+```python
+def _extract_objective(metrics: dict | None, obj_name: str) -> float:
+    if metrics is None:
+        return 0.0
+    if obj_name.startswith("-"):
+        return -metrics.get(obj_name[1:], 0.0)
+    return metrics.get(obj_name, 0.0)
+```
+
+**精英保留**
+
+每代保留 `elites` 个 IR 最高的有效个体直接进入下一代。若无有效个体，则随机生成替代。
+
+**日志输出**
+
+每代输出：代数、种群大小、有效因子数、最佳 IR 值。
+
+#### 3.7.5 `llm_miner.py` — LLM Agent 挖掘器
+
+基于大语言模型的迭代式因子发现挖掘器。通过 httpx 调用 OpenAI 兼容 API（POST /v1/chat/completions）。
+
+**状态管理**
+
+| 属性 | 容量 | 说明 |
+|------|------|------|
+| `_best_factors` | top 20 | 历史最佳因子列表，按 IR 降序维护 |
+| `_recent_failures` | 最近 10 | 最近评估失败的表达式列表 |
+| `_all_results` | 无限制 | 完整尝试记录 |
+
+**迭代流程**
+
+```
+第 1 轮: build_initial_prompt(n_factors) → LLM 生成
+    │
+    ▼
+┌─── 迭代循环 (max_iterations 轮) ─────────────────────────────────┐
+│                                                                   │
+│   1. 构建 prompt:                                                 │
+│      - 第 1 轮: build_initial_prompt(n_factors)                    │
+│      - 后续轮: build_iteration_prompt(                             │
+│          n_factors, best[:5], failures[-5:], iteration, max_iter)  │
+│                                                                   │
+│   2. 调用 LLM: httpx.post(api_url, payload, timeout=60s)          │
+│                                                                   │
+│   3. 解析响应: parse_llm_response(content) → 表达式列表             │
+│                                                                   │
+│   4. 评估: _evaluate_batch(expressions) → results                  │
+│                                                                   │
+│   5. 更新状态:                                                     │
+│      - 成功因子加入 _best_factors (保留 top 20)                    │
+│      - 失败表达式加入 _recent_failures (保留最近 10)               │
+│      - 记录本轮最佳 IR                                             │
+│                                                                   │
+│   6. 终止条件检查:                                                 │
+│      - 连续 3 轮无改善 (stagnation >= 3)                           │
+│      - 达到 max_iterations                                         │
+│                                                                   │
+└───────────────────────────────────────────────────────────────────┘
+    │
+    ▼
+返回: _best_factors (top 20 按 IR 降序)
+```
+
+**终止条件**
+
+- 连续 `_STAGNATION_LIMIT = 3` 轮无 IR 改善
+- 达到 `config.LLM_MAX_ITERATIONS` 上限
+- LLM 返回空响应或无法解析时计入停滞计数
+
+**\_call\_llm(messages)**
+
+通过 httpx 同步调用 LLM API，支持 Bearer Token 认证。超时 60 秒，失败时返回空字符串。
+
+#### 3.7.6 `prompts.py` — LLM 提示词模板
+
+为 LLM Agent 挖掘器提供提示词构建和响应解析功能。
+
+**SYSTEM\_PROMPT**
+
+系统提示词，定义 LLM 的角色和约束：
+
+- **角色定义**：专业的量化因子研究员
+- **可用数据字段**：open, high, low, close, volume, amount, returns
+- **可用算子**：截面（rank, zscore, demean）、滚动（rolling\_mean/std/sum/max/min）、相关（rolling\_corr）、时序（shift, pct\_change, diff）、逐元素（log, abs, sign）、算术（+, -, *, /）
+- **输出格式规则**：JSON 格式 `{"factors": ["表达式1", "表达式2", ...]}`
+
+**build\_initial\_prompt(n)**
+
+构建第一轮迭代的提示词，要求生成 `n` 个因子表达式。
+
+**build\_iteration\_prompt(n\_factors, best\_factors, recent\_failures, iteration, max\_iterations)**
+
+构建后续迭代的提示词，包含历史反馈信息：
+
+- **最佳因子反馈**：展示前 5 个最佳因子的 IR、IC、Sharpe 及表达式
+- **失败案例反馈**：展示最近 5 个评估失败的表达式，引导 LLM 避免类似错误
+- **迭代进度**：当前轮次 / 总轮次
+
+**parse\_llm\_response(content)** — 响应解析
+
+两层解析策略：
+
+1. **JSON 解析**：尝试 `json.loads(content)`，提取 `factors` 字段中的字符串列表
+2. **正则回退**：JSON 解析失败时，使用正则表达式匹配引号内的表达式模式，匹配算子名、数据字段名、数字、运算符、括号等组成的合法因子表达式
+
+---
+
 ## 4. 数据流
 
 从命令行输入到最终报告的完整数据流：
@@ -548,6 +861,77 @@ CLI 输入
 │  输出: PNG 图片文件 + Rich 终端美化表格                                 │
 │  处理: matplotlib 绑图 → 项目根目录 output/ 目录                       │
 │        Rich Table → 终端指标摘要                                       │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 挖掘模式数据流（Step 6）
+
+挖掘模式是一种独立的顶层运行模式，内部调用 Data → Backend → Factor → Backtest 层完成因子评估，但不经过 Report 和 Display 层。
+
+#### GP+NSGA-II 挖掘模式
+
+```
+CLI 输入: --mine-gp
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Step 6a: GP 初始化                                                  │
+│  输入: StockData, BackendBase                                        │
+│  处理: BaseMiner 预计算前向收益率 → 随机生成 population_size 棵表达式树 │
+└───────────────────────────┬─────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Step 6b: GP 进化循环 (n_generations 代)                             │
+│                                                                     │
+│  对每棵树: to_expression(tree) → 字符串                               │
+│       → compile_factor(expr) → 编译函数                               │
+│       → eval(stock_data, backend) → 因子值 ndarray                    │
+│       → run_backtest(factor_values, forward_returns, dates)          │
+│       → calc_metrics(result) → 指标字典                               │
+│                                                                     │
+│  适应度计算: objectives → metrics 取值 → (float, ...) 元组            │
+│  NSGA-II 选择 → 精英保留 → 交叉 + 变异 → 新种群                       │
+└───────────────────────────┬─────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Step 6c: 结果汇总                                                   │
+│  输出: list[(expression, metrics)] — 所有历史成功因子按 IR 降序        │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### LLM Agent 挖掘模式
+
+```
+CLI 输入: --mine-llm
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Step 6a: LLM 初始化                                                 │
+│  输入: StockData, BackendBase                                        │
+│  处理: BaseMiner 预计算前向收益率 → 初始化状态容器                      │
+└───────────────────────────┬─────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Step 6b: LLM 迭代循环 (max_iterations 轮)                           │
+│                                                                     │
+│  第 1 轮: build_initial_prompt(n) → LLM 生成                         │
+│  后续轮: build_iteration_prompt(n, best[:5], failures[-5:], ...)     │
+│       → LLM 生成                                                    │
+│                                                                     │
+│  每轮: parse_llm_response(content) → 表达式列表                       │
+│       → _evaluate_batch(expressions)                                 │
+│         对每个表达式: compile → eval → backtest → metrics             │
+│       → 更新 best_factors / recent_failures                          │
+│       → 检查停滞条件 (连续 3 轮无改善则终止)                           │
+└───────────────────────────┬─────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  Step 6c: 结果汇总                                                   │
+│  输出: list[(expression, metrics)] — top 20 最佳因子按 IR 降序        │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -709,6 +1093,22 @@ OUTPUT_DIR: Path = PROJECT_ROOT / _get("report", "output_dir")   # → 项目根
 | `backend.type` | str | `"numpy"` | 计算后端 |
 | `logging.level` | str | `"INFO"` | 日志级别 |
 | `logging.format` | str | (格式字符串) | 日志格式 |
+| `mining.gp.population_size` | int | `100` | GP 种群大小 |
+| `mining.gp.n_generations` | int | `50` | 进化代数 |
+| `mining.gp.crossover_prob` | float | `0.8` | 交叉概率 |
+| `mining.gp.mutation_prob` | float | `0.15` | 变异概率 |
+| `mining.gp.max_depth` | int | `4` | 表达式树最大深度 |
+| `mining.gp.tournament_size` | int | `3` | 锦标赛选择大小 |
+| `mining.gp.elites` | int | `5` | 精英保留数量 |
+| `mining.gp.objectives` | list | `["ir", "sharpe"]` | NSGA-II 优化目标（`-` 前缀取反） |
+| `mining.gp.seed` | int | `42` | 随机种子 |
+| `mining.llm.api_url` | str | `"http://localhost:39001/v1/chat/completions"` | LLM API 地址 |
+| `mining.llm.model_name` | str | `"glm-5.1"` | 模型名称 |
+| `mining.llm.api_key` | str | `""` | API Key |
+| `mining.llm.max_iterations` | int | `10` | 最大迭代轮数 |
+| `mining.llm.factors_per_iteration` | int | `5` | 每轮生成因子数 |
+| `mining.llm.temperature` | float | `0.7` | 采样温度 |
+| `mining.llm.max_tokens` | int | `2048` | 单次回复最大 token 数 |
 
 ---
 
@@ -904,3 +1304,61 @@ line_color = "#2196F3"        # 单线图颜色（支持 hex 颜色值）
 ```
 
 这些配色参数在 `report/summary.py` 中通过 `config.COLORMAP_GROUPS` 等模块级变量读取，零硬编码。
+
+### 7.6 自定义挖掘策略
+
+继承 `BaseMiner` 实现自定义因子挖掘器。`BaseMiner` 已提供完整的编译→回测→指标评估管线，子类只需关注因子生成策略。
+
+```python
+# mining/my_miner.py
+
+from .base import BaseMiner
+
+class MyMiner(BaseMiner):
+    """自定义挖掘策略示例。"""
+
+    def mine(self) -> list[tuple[str, dict]]:
+        # 1. 自定义因子生成逻辑
+        candidates = self._generate_candidates()
+
+        # 2. 使用 _evaluate_factor(expression) 评估每个因子
+        for expr in candidates:
+            metrics = self._evaluate_factor(expr)
+            if metrics is not None:
+                # 处理有效因子
+                ...
+
+        # 3. 使用 _evaluate_batch(expressions) 批量评估
+        results = self._evaluate_batch(candidates)
+
+        # 4. 返回 [(expression, metrics), ...] 按 IR 降序
+        valid = [(expr, m) for expr, m in results if m is not None]
+        valid.sort(key=lambda x: x[1]["ir"], reverse=True)
+        return valid
+
+    def _generate_candidates(self) -> list[str]:
+        # 自定义因子表达式生成逻辑
+        ...
+```
+
+关键接口说明：
+
+| 方法 / 属性 | 说明 |
+|-------------|------|
+| `self._evaluate_factor(expression)` | 评估单个因子，返回指标字典或 `None` |
+| `self._evaluate_batch(expressions)` | 批量评估，返回 `[(expr, metrics\|None), ...]` |
+| `self._seen_expressions` | 去重集合，自动跳过已评估的表达式 |
+| `self.stock_data` | 行情数据（`StockData` 实例） |
+| `self.backend` | 计算后端（`BackendBase` 实例） |
+| `self._forward_returns` | 预计算的前向收益率 ndarray |
+
+注册自定义挖掘器到 CLI：
+
+```python
+# main.py 中添加 --mine-my 选项
+from xialpha.mining.my_miner import MyMiner
+
+elif args.mine_my:
+    miner = MyMiner(stock_data, backend)
+    results = miner.mine()
+```

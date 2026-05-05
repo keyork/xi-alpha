@@ -11,6 +11,8 @@
 - **批量因子并行评估** — 多因子并行计算，附带因子间相关性矩阵分析
 - **Rich 终端美化** — 基于 Rich 库的面板头部、指标表格、进度条和计时器，替代原始 logging 输出，运行过程一目了然
 - **TOML 配置驱动** — 数据源、回测参数、报告配色均通过 `xi-alpha.toml` 配置，零硬编码
+- **GP+NSGA-II 因子挖掘** — 遗传编程自动生成因子表达式树，NSGA-II 多目标选择优化 IR 和 Sharpe
+- **LLM Agent 因子挖掘** — 基于大语言模型的迭代式因子发现，根据回测反馈自动改进
 - **后端抽象层** — 当前基于 NumPy/Pandas 实现，预留 JAX/PyTorch 后端接口
 
 ## 快速开始
@@ -42,6 +44,16 @@ uv run python main.py --classic
 uv run xi-alpha --factor "rank(close) - rank(volume)"
 ```
 
+因子挖掘：
+
+```bash
+# GP+NSGA-II 因子挖掘（自动进化搜索因子）
+uv run xi-alpha --mine-gp
+
+# LLM Agent 因子挖掘（需要配置 LLM API）
+uv run xi-alpha --mine-llm
+```
+
 ## 项目结构
 
 ```
@@ -53,6 +65,7 @@ xi-alpha/
 │   ├── data/             # 数据获取与缓存（基于 akshare）
 │   ├── display.py        # Rich 终端美化显示（面板、表格、进度条、计时器）
 │   ├── factor/           # AST 因子表达式编译器与算子库
+│   ├── mining/           # 因子挖掘（GP+NSGA-II 进化 / LLM Agent）
 │   ├── report/           # 回测报告生成与可视化
 │   ├── config.py         # 配置加载
 │   └── main.py           # CLI 入口
@@ -129,6 +142,27 @@ colormap_corr = "coolwarm"    # 相关性矩阵色谱
 colormap_nav = "tab10"        # 多空净值色谱
 line_color = "steelblue"      # 单线图默认颜色
 
+# ── 因子挖掘 ──
+[mining.gp]
+population_size = 100     # GP 种群大小
+n_generations = 50        # 进化代数
+crossover_prob = 0.8      # 交叉概率
+mutation_prob = 0.15      # 变异概率
+max_depth = 4             # 表达式树最大深度
+tournament_size = 3       # 锦标赛选择大小
+elites = 5                # 精英保留数量
+objectives = ["ir", "sharpe"]  # NSGA-II 优化目标
+seed = 42                 # 随机种子
+
+[mining.llm]
+api_url = "http://localhost:39001/v1/chat/completions"  # OpenAI 兼容 API 地址
+model_name = "glm-5.1"    # 模型名称
+api_key = ""              # API Key（可为空）
+max_iterations = 10       # 最大迭代轮数
+factors_per_iteration = 5 # 每轮生成因子数
+temperature = 0.7         # 采样温度
+max_tokens = 2048         # 单次回复最大 token 数
+
 # ── 后端 ──
 [backend]
 type = "numpy"            # numpy / jax / torch（预留）
@@ -155,6 +189,8 @@ xi-alpha [选项]
 | `--groups N` | 分组数量，默认 5 |
 | `--output DIR` | 报告输出目录 |
 | `--no-cache` | 禁用数据缓存，强制重新获取 |
+| `--mine-gp` | GP+NSGA-II 因子挖掘 |
+| `--mine-llm` | LLM Agent 因子挖掘 |
 
 示例：
 
@@ -238,6 +274,124 @@ close / rolling_mean(close, 20) - 1
 rank(close) - rank(volume)
 ```
 
+## 因子挖掘
+
+xi-alpha 提供两种自动因子挖掘方式：基于遗传编程（GP+NSGA-II）的进化搜索，以及基于大语言模型（LLM Agent）的迭代发现。
+
+### GP+NSGA-II 因子挖掘
+
+#### 原理
+
+GP+NSGA-II 将因子搜索建模为多目标优化问题，流程如下：
+
+1. **初始化** — 随机生成 `population_size` 棵表达式树，组成初始种群
+2. **评估** — 对每个个体编译并回测，计算目标函数值（如 IR、Sharpe）
+3. **非支配排序** — 使用 NSGA-II 算法按 Pareto 前沿分层，兼顾多个优化目标
+4. **选择** — 锦标赛选择（`tournament_size` 参与者中选最优）
+5. **交叉** — 以 `crossover_prob` 概率随机交换两棵树的子树
+6. **变异** — 以 `mutation_prob` 概率随机替换一个子树
+7. **精英保留** — 保留前 `elites` 个最优个体直接进入下一代
+8. 循环 2-7 直到 `n_generations` 代结束
+
+#### 关键参数
+
+| 参数 | 说明 |
+|------|------|
+| `population_size` | 种群大小，越大搜索越广但越慢 |
+| `n_generations` | 进化代数 |
+| `max_depth` | 表达式树最大深度，控制因子复杂度 |
+| `objectives` | 优化目标列表，支持 `ir`、`sharpe`、`-max_drawdown`、`-daily_turnover`（`-` 前缀表示最小化） |
+| `elites` | 精英保留数量 |
+| `tournament_size` | 锦标赛选择大小 |
+| `crossover_prob` | 交叉概率 |
+| `mutation_prob` | 变异概率 |
+| `seed` | 随机种子 |
+
+#### 表达式树操作
+
+**终端节点**：
+- 数据字段（85% 概率）：`open`、`high`、`low`、`close`、`volume`、`amount`、`returns`
+- 常量（15% 概率）：随机浮点数
+
+**算子节点**：
+- 一元算子：`rank`、`zscore`、`demean`、`log`、`abs`、`sign`
+- 窗口算子：`rolling_mean`、`rolling_std`、`rolling_sum`、`rolling_max`、`rolling_min`
+- 算术运算：`+`、`-`、`*`、`/`
+- 双变量算子：`rolling_corr`
+
+**交叉**：随机选择两棵树中的一个节点，交换以该节点为根的子树。
+
+**变异**：随机选择树中的一个节点，用新生成的随机子树替换。
+
+#### 使用示例
+
+```bash
+# 使用默认配置运行 GP 因子挖掘
+uv run xi-alpha --mine-gp
+
+# 指定日期范围
+uv run xi-alpha --mine-gp --start 2022-01-01 --end 2024-06-30
+```
+
+### LLM Agent 因子挖掘
+
+#### 原理
+
+LLM Agent 利用大语言模型的代码生成能力，通过迭代反馈循环发现有效因子：
+
+1. **初始生成** — LLM 根据可用算子描述自由生成因子表达式
+2. **编译回测** — 对每个表达式编译并执行回测，收集指标
+3. **反馈改进** — 将 top 因子指标和失败表达式反馈给 LLM，引导改进方向
+4. **迭代循环** — 重复 2-3 直到 `max_iterations` 轮结束
+
+#### Agent 设计
+
+- **第一轮**：LLM 根据算子列表和语法规则自由生成因子
+- **后续轮**：向 LLM 展示当前 top 因子的指标（IR、IC、Sharpe）和编译失败的表达式，引导改进方向
+- **自动去重**：已评估的表达式会被记录，不会重复提交给 LLM
+- **提前终止**：连续 3 轮无 IR 改善则自动终止
+
+#### API 配置
+
+LLM Agent 使用兼容 OpenAI 规范的 API（`/v1/chat/completions`），需要配置以下参数：
+
+| 参数 | 说明 |
+|------|------|
+| `api_url` | API 地址，如 `http://localhost:39001/v1/chat/completions` |
+| `model_name` | 模型名称 |
+| `api_key` | API Key，可为空 |
+| `max_iterations` | 最大迭代轮数 |
+| `factors_per_iteration` | 每轮生成因子数 |
+| `temperature` | 采样温度 |
+| `max_tokens` | 单次回复最大 token 数 |
+
+#### 使用示例
+
+```bash
+# 运行 LLM Agent 因子挖掘（需要先在 xi-alpha.toml 中配置 API）
+uv run xi-alpha --mine-llm
+
+# 指定日期范围
+uv run xi-alpha --mine-llm --start 2022-01-01 --end 2024-06-30
+```
+
+### 输出
+
+两种挖掘方式共享相同的输出格式：
+
+**终端显示**：运行结束后以 Rich 表格展示 top 10 因子，包含以下字段：
+
+| 字段 | 说明 |
+|------|------|
+| IR | 信息比率 |
+| IC | 信息系数均值 |
+| Sharpe | 夏普比率 |
+| 表达式 | 因子表达式字符串 |
+
+**JSON 文件**：完整结果保存为 JSON 文件，路径分别为：
+- GP 挖掘：`output/mining_gp.json`
+- LLM 挖掘：`output/mining_llm.json`
+
 ## 开发
 
 ```bash
@@ -251,7 +405,7 @@ uv run pytest tests/
 uv run pytest tests/test_factor.py -v
 ```
 
-核心依赖：numpy, pandas, akshare, scipy, matplotlib, rich。
+核心依赖：numpy, pandas, akshare, scipy, matplotlib, rich, httpx。
 
 ## 许可证
 
