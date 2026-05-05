@@ -64,6 +64,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Run all classic factors from the library",
     )
+    parser.add_argument(
+        "--mine-gp",
+        action="store_true",
+        default=False,
+        help="GP+NSGA-II 因子挖掘",
+    )
+    parser.add_argument(
+        "--mine-llm",
+        action="store_true",
+        default=False,
+        help="LLM Agent 因子挖掘",
+    )
     return parser
 
 
@@ -94,9 +106,13 @@ def _parse_factors_file(path: str) -> list[tuple[str, str]]:
 
 
 def run_pipeline(args: argparse.Namespace) -> None:
+    if args.mine_gp or args.mine_llm:
+        _run_mining(args)
+        return
+
     if not any([args.factor, args.factors_file, args.classic]):
         from .display import _console
-        _console.print("[bold red]错误: 请提供 --factor, --factors-file 或 --classic 之一[/]")
+        _console.print("[bold red]错误: 请提供 --factor, --factors-file, --classic, --mine-gp 或 --mine-llm 之一[/]")
         _console.print("[dim]运行 --help 查看用法[/]")
         sys.exit(1)
 
@@ -185,6 +201,52 @@ def _run_batch(
     print_step("report", "生成批量报告...")
     factor_names = [name for name, _ in factor_list]
     plot_batch_summary(results, corr_matrix, factor_names, output_dir=args.output)
+
+
+def _run_mining(args: argparse.Namespace) -> None:
+    from .backend.auto import get_backend
+    from .mining import GPMiner, LLMMiner
+    from .display import _console
+
+    timer = Timer()
+
+    stock_data = _load_data(args)
+    backend = get_backend()
+
+    if args.mine_gp:
+        print_header(stock_data, 0, "GP+NSGA-II 因子挖掘")
+        miner = GPMiner(stock_data, backend)
+    else:
+        print_header(stock_data, 0, "LLM Agent 因子挖掘")
+        miner = LLMMiner(stock_data, backend)
+
+    results = miner.mine()
+
+    if not results:
+        _console.print("[bold red]未发现有效因子[/]")
+        return
+
+    _console.print(f"\n[bold green]发现 {len(results)} 个有效因子[/]")
+    _console.print("[bold]Top 10 因子（按 IR 降序）:[/]")
+    for i, (expr, metrics) in enumerate(results[:10], 1):
+        ir = metrics.get("ir", 0)
+        ic = metrics.get("ic_mean", 0)
+        sharpe = metrics.get("sharpe", 0)
+        _console.print(f"  {i:>2}. IR=[cyan]{ir:.4f}[/] IC=[green]{ic:.4f}[/] Sharpe=[yellow]{sharpe:.4f}[/] {expr[:60]}")
+
+    import json
+    from pathlib import Path
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_file = output_dir / ("mining_gp.json" if args.mine_gp else "mining_llm.json")
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(
+            [{"expression": expr, **{k: float(v) if isinstance(v, (int, float)) else v for k, v in m.items()}} for expr, m in results],
+            f, ensure_ascii=False, indent=2,
+        )
+    _console.print(f"\n[dim]结果已保存至 {output_file}[/]")
+
+    print_done(timer.elapsed)
 
 
 def main() -> None:
